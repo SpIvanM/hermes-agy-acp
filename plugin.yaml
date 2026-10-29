@@ -1,0 +1,6 @@
+kind: model-provider
+name: hermes-agy-acp
+version: 1.0.0
+description: Decoupled Agent Client Protocol (ACP) adapter bridging NousResearch Hermes Agent with Google Antigravity
+entrypoint: hermes_agy_acp
+provider: antigravity-acp
