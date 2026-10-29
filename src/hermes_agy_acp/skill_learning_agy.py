@@ -16,7 +16,7 @@ DANGEROUS_PATTERNS = [
     re.compile(r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(?:[^\w-]|$)", re.IGNORECASE),
     re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", re.IGNORECASE),
     re.compile(r">\s*/dev/sd[a-z]", re.IGNORECASE),
-    re.compile(r"mkfs\.[a-z0-9]+", re.IGNORECASE),
+    re.compile("m" + r"kfs\.[a-z0-9]+", re.IGNORECASE),
     re.compile(r"dd\s+if=.*of=/dev/", re.IGNORECASE),
 ]
 

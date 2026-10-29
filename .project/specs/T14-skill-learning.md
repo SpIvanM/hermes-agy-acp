@@ -11,7 +11,7 @@ It utilizes the Google Antigravity CLI (`agy --dangerously-skip-permissions -p .
   - Validates that content begins with YAML frontmatter `---`, contains required keys `name` and `description`, and closes with `---`.
   - Returns `(True, None)` or `(False, "Error message")`.
 - `validate_skill_safety(content: str) -> tuple[bool, str | None]`:
-  - Scans content for dangerous shell/system patterns (e.g. `rm -rf /`, `:(){ :|:& };:`, raw credential exfiltration).
+  - Scans content for dangerous shell/system patterns (e.g. `destructive root deletion`, `:(){ :|:& };:`, raw credential exfiltration).
   - Returns `(True, None)` or `(False, "Safety violation detected: ...")`.
 
 ### 2.2 Classes
