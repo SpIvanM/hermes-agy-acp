@@ -39,6 +39,18 @@ def resolve_binary(binary_name: str, override_path: str | None = None) -> Path |
             if candidate:
                 return Path(candidate).resolve()
 
+    # Search standard fallback directories when PATH is bare (systemd / daemon)
+    fallback_dirs = [
+        Path.home() / ".local" / "bin",
+        Path.home() / ".agy" / "bin",
+        Path("/usr/local/bin"),
+    ]
+    for d in fallback_dirs:
+        for candidate_name in (binary_name, f"{binary_name}.par"):
+            candidate = d / candidate_name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate.resolve()
+
     return None
 
 

@@ -16,11 +16,18 @@ try:
     from providers import register_provider
     from providers.base import ProviderProfile as HermesProviderProfile
 
-    _profile = HermesProviderProfile(
+    class AntigravityACPProfile(HermesProviderProfile):
+        def create_client(self, **client_kwargs):
+            return create_client(**client_kwargs)
+
+    _profile = AntigravityACPProfile(
         name="antigravity-acp",
         aliases=("agy-acp", "antigravity"),
-        api_mode="custom",
+        api_mode="chat_completions",
         auth_type="external_process",
+        process_command="agy_acp_server.par",
+        process_args=("--uid=",),
+        base_url="acp://antigravity",
         supports_streaming=True,
     )
     register_provider(_profile)

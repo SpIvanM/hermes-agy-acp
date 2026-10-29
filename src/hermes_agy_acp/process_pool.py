@@ -153,6 +153,7 @@ class ACPProcessSupervisor:
             raise EOFError("Process stdout closed (EOF)")
         return item
 
+
     def terminate(self, timeout: float = 3.0) -> None:
         """Gracefully terminate process (SIGTERM then SIGKILL)."""
         if self.process is not None:
@@ -164,6 +165,8 @@ class ACPProcessSupervisor:
                     self.process.kill()
                     self.process.wait()
             self.process = None
+
+    stop = terminate
 
     def restart(self) -> None:
         """Terminate existing process and launch a fresh instance."""

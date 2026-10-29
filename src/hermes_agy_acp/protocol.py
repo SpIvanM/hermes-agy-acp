@@ -91,9 +91,13 @@ def build_session_new_request(
     req_id: int | str,
     cwd: str,
     model: str | None = None,
+    mcp_servers: list[Any] | None = None,
 ) -> JsonRpcRequest:
     """Build an ACP session/new JSON-RPC request."""
-    params: dict[str, Any] = {"cwd": cwd}
+    params: dict[str, Any] = {
+        "cwd": cwd,
+        "mcpServers": mcp_servers if mcp_servers is not None else [],
+    }
     if model is not None:
         params["model"] = model
     return JsonRpcRequest(id=req_id, method="session/new", params=params)
