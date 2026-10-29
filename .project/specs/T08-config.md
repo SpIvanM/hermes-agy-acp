@@ -7,7 +7,7 @@ It defines application settings with validation, environment variable reading, a
 ## 2. Public Interface
 
 ### 2.1 Functions
-- esolve_binary(binary_name: str, override_path: Optional[str] = None) -> Optional[Path]
+- resolve_binary(binary_name: str, override_path: Optional[str] = None) -> Optional[Path]
   - Resolves executable binary cross-platform.
   - If override_path is provided and non-empty:
     - Resolves and verifies that the path exists and is a file. If not found, raises FileNotFoundError.
@@ -40,7 +40,7 @@ It defines application settings with validation, environment variable reading, a
   - Returns cached or singleton Settings loaded from environment.
 
 ## 3. Invariants & Edge Cases
-- Zero hardcoded machine paths (e.g. no /home/ivanm/... or C:\Users\...).
+- Zero hardcoded machine paths (e.g. no /home/username/... or C:\Users\...).
 - Respects active environment variables over defaults.
 - Handles empty string env vars (e.g. AGY_CLI_PATH=") gracefully as None.
 - On non-Windows, if AGY_ACP_ARGS is not explicitly set, defaults to ['--uid=']. On Windows, defaults to [].
