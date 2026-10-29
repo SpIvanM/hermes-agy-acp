@@ -1,0 +1,63 @@
+# ==========================================
+# Zero-Credential & Secret Isolation Baseline
+# ==========================================
+
+# Environment variables & local secrets
+.env
+.env.*
+*.env
+!*.env.example
+*.local
+*.secret
+*.token
+*.key
+*.pem
+*.crt
+
+# Local configurations & auth caches
+config.yaml
+!config.example.yaml
+auth.json
+hosts.yml
+*.ovpn
+
+# Agent & AI Provider Caches / Sessions
+.hermes/
+.gemini/
+.antigravitycli/
+.claude/
+.claude.json
+.agy/
+.cursor/
+*.db
+*.sqlite*
+*.log
+logs/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Cleanroom Blind TDD private suites
+.tests/
+
+# Cross-platform & Editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

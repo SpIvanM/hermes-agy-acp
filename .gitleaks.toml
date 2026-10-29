@@ -1,0 +1,16 @@
+title = "gitleaks config for hermes-agy-acp"
+
+[extend]
+useDefault = true
+
+[[rules]]
+description = "Antigravity OAuth Token"
+id = "antigravity-oauth-token"
+regex = '''(?i)(antigravity[-_]?oauth[-_]?token\s*[:=]\s*['\"][a-zA-Z0-9_\-\.]{20,}['\"])'''
+secretGroup = 1
+
+[[rules]]
+description = "Google Cloud Service Account / API Key"
+id = "google-api-key"
+regex = '''AIza[0-9A-Za-z\-_]{35}'''
+secretGroup = 0
