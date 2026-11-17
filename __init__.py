@@ -27,6 +27,15 @@ try:
         auth_type="external_process",
         process_command="agy_acp_server.par",
         process_args=("--uid=",),
+        process_command_env_vars=("AGY_ACP_SERVER_PATH",),
+        process_args_env_var="AGY_ACP_ARGS",
+        fallback_models=(
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-low",
+            "gemini-4-hydrogen",
+            "gemini-4-argon",
+        ),
         base_url="acp://antigravity",
         supports_streaming=True,
     )

@@ -70,18 +70,22 @@ def build_initialize_request(
     client_name: str = "hermes-agy-acp",
     client_version: str = "1.0.0",
 ) -> JsonRpcRequest:
-    """Build an ACP initialize JSON-RPC request."""
+    """Build an ACP v1 initialize JSON-RPC request."""
     return JsonRpcRequest(
         id=req_id,
         method="initialize",
         params={
             "protocolVersion": 1,
+            "clientCapabilities": {
+                "fs": {
+                    "readTextFile": True,
+                    "writeTextFile": True,
+                }
+            },
             "clientInfo": {
                 "name": client_name,
+                "title": "Hermes Agent",
                 "version": client_version,
-            },
-            "capabilities": {
-                "streaming": True,
             },
         },
     )
@@ -101,6 +105,74 @@ def build_session_new_request(
     if model is not None:
         params["model"] = model
     return JsonRpcRequest(id=req_id, method="session/new", params=params)
+
+
+def build_session_load_request(
+    req_id: int | str,
+    session_id: str,
+    cwd: str,
+    mcp_servers: list[Any] | None = None,
+) -> JsonRpcRequest:
+    """Build an ACP session/load JSON-RPC request."""
+    return JsonRpcRequest(
+        id=req_id,
+        method="session/load",
+        params={
+            "sessionId": session_id,
+            "cwd": cwd,
+            "mcpServers": mcp_servers if mcp_servers is not None else [],
+        },
+    )
+
+
+def build_session_set_mode_request(
+    req_id: int | str,
+    session_id: str,
+    mode_id: str = "yolo",
+) -> JsonRpcRequest:
+    """Build an ACP session/set_mode JSON-RPC request."""
+    return JsonRpcRequest(
+        id=req_id,
+        method="session/set_mode",
+        params={
+            "sessionId": session_id,
+            "modeId": mode_id,
+        },
+    )
+
+
+def build_session_set_config_option_request(
+    req_id: int | str,
+    session_id: str,
+    config_id: str,
+    value: str,
+) -> JsonRpcRequest:
+    """Build an ACP session/set_config_option JSON-RPC request."""
+    return JsonRpcRequest(
+        id=req_id,
+        method="session/set_config_option",
+        params={
+            "sessionId": session_id,
+            "configId": config_id,
+            "value": value,
+        },
+    )
+
+
+def build_session_set_model_request(
+    req_id: int | str,
+    session_id: str,
+    model_id: str,
+) -> JsonRpcRequest:
+    """Build a legacy ACP session/set_model JSON-RPC request."""
+    return JsonRpcRequest(
+        id=req_id,
+        method="session/set_model",
+        params={
+            "sessionId": session_id,
+            "modelId": model_id,
+        },
+    )
 
 
 def build_session_prompt_request(
@@ -129,15 +201,67 @@ def build_session_cancel_notification(session_id: str) -> JsonRpcNotification:
     )
 
 
+def select_permission_option_id(
+    options: list[dict[str, Any]] | None = None,
+    preferred_option_id: str | None = None,
+) -> str:
+    """Pick the most permissive approval optionId from ACP permission options."""
+    if preferred_option_id and preferred_option_id != "allow":
+        return preferred_option_id
+
+    if isinstance(options, list):
+        for target_kind in ("allow_always", "allow_once"):
+            for opt in options:
+                if not isinstance(opt, dict):
+                    continue
+                kind = str(opt.get("kind") or "").strip()
+                opt_id = str(opt.get("optionId") or opt.get("id") or "").strip()
+                if opt_id and (kind == target_kind or opt_id == target_kind):
+                    return opt_id
+
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            kind = str(opt.get("kind") or "").strip()
+            opt_id = str(opt.get("optionId") or opt.get("id") or "").strip()
+            if opt_id and (kind.startswith("allow") or opt_id.startswith("allow")):
+                return opt_id
+
+        for opt in options:
+            if isinstance(opt, dict):
+                opt_id = str(opt.get("optionId") or opt.get("id") or "").strip()
+                if opt_id:
+                    return opt_id
+
+    return "allow_once"
+
+
 def build_permission_approval_response(
     req_id: int | str,
-    decision: str = "allow",
+    option_id: str | None = None,
+    options: list[dict[str, Any]] | None = None,
 ) -> JsonRpcResponse:
-    """Build an auto-approval response for session/request_permission."""
+    """Build an ACP v1 selected-outcome approval response for session/request_permission."""
+    chosen = select_permission_option_id(options=options, preferred_option_id=option_id)
     return JsonRpcResponse(
         id=req_id,
-        result={"decision": decision},
+        result={
+            "outcome": {
+                "outcome": "selected",
+                "optionId": chosen,
+            }
+        },
     )
+
+
+def build_jsonrpc_result(req_id: int | str, result: Any) -> dict[str, Any]:
+    """Build a raw JSON-RPC 2.0 result dictionary (supports explicit null results)."""
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+def build_jsonrpc_error(req_id: int | str, code: int, message: str) -> JsonRpcResponse:
+    """Build a JSON-RPC 2.0 error response."""
+    return JsonRpcResponse(id=req_id, error=JsonRpcError(code=code, message=message))
 
 
 AUTH_KEYWORDS = {
@@ -154,7 +278,7 @@ AUTH_KEYWORDS = {
 def is_auth_error(error: JsonRpcError | dict[str, Any] | str | Exception) -> bool:
     """Determine if a given error, string, or exception indicates authentication failure."""
     if isinstance(error, JsonRpcError):
-        if error.code in (401, -32001):
+        if error.code in (401, -32000, -32001):
             return True
         text = f"{error.message} {error.data}".lower()
     elif isinstance(error, dict):
@@ -162,7 +286,7 @@ def is_auth_error(error: JsonRpcError | dict[str, Any] | str | Exception) -> boo
         err_obj = error.get("error")
         if isinstance(err_obj, dict):
             raw_code = err_obj.get("code", raw_code)
-        if raw_code in (401, -32001):
+        if raw_code in (401, -32000, -32001):
             return True
         text = json.dumps(error).lower()
     elif isinstance(error, Exception):

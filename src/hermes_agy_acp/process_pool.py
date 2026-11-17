@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import collections
+import contextlib
 import logging
 import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
-from hermes_agy_acp.config import get_settings
+from hermes_agy_acp.config import get_settings, resolve_binary
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,39 @@ SENSITIVE_PATTERNS = [
     (re.compile(r"((?:password|token|secret|api_?key)=)[^\s&]+", re.IGNORECASE), r"\1[REDACTED]"),
     (re.compile(r"(ya29\.[a-zA-Z0-9_-]+)", re.IGNORECASE), r"[REDACTED]"),
 ]
+
+PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+)
+
+
+def build_subprocess_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Build child ACP environment preserving proxy variables and ~/.local/bin in PATH."""
+    env = dict(base_env) if base_env is not None else os.environ.copy()
+
+    for key in PROXY_ENV_KEYS:
+        if key not in env and key in os.environ:
+            env[key] = os.environ[key]
+
+    if not env.get("HOME"):
+        env["HOME"] = os.path.expanduser("~")
+
+    home_path = Path(env["HOME"])
+    extra_bins = [str(home_path / ".local" / "bin"), str(home_path / ".agy" / "bin")]
+    raw_path = env.get("PATH", "")
+    parts = [p for p in raw_path.split(os.pathsep) if p] if raw_path else []
+    for extra in reversed(extra_bins):
+        if extra not in parts:
+            parts.insert(0, extra)
+    env["PATH"] = os.pathsep.join(parts)
+    return env
 
 
 class StderrRingBuffer:
@@ -60,21 +95,35 @@ class ACPProcessSupervisor:
         auto_respawn: bool = True,
         stderr_maxlen: int = 100,
     ) -> None:
-        self.command = command
+        self.command = list(command) if command is not None else None
         self.cwd = str(cwd) if cwd is not None else None
-        self.env = env if env is not None else os.environ.copy()
+        self._base_env = dict(env) if env is not None else None
+        self.env = build_subprocess_env(self._base_env)
         self.auto_respawn = auto_respawn
         self.stderr_buffer = StderrRingBuffer(max_lines=stderr_maxlen)
         self.process: subprocess.Popen[bytes] | None = None
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
         self._threads: list[threading.Thread] = []
+        self._write_lock = threading.Lock()
+
+    def _resolve_command(self) -> list[str]:
+        if not self.command:
+            return get_settings().get_server_command()
+        cmd = list(self.command)
+        binary = cmd[0]
+        if not os.path.isabs(binary) and not shutil.which(binary):
+            resolved = resolve_binary(binary)
+            if resolved is not None:
+                cmd[0] = str(resolved)
+        return cmd
 
     def start(self) -> None:
         """Start or restart the subprocess with supervised stdio."""
         if self.is_alive():
             return
 
-        cmd = self.command or get_settings().get_server_command()
+        cmd = self._resolve_command()
+        self.env = build_subprocess_env(self._base_env)
         self._stdout_queue = queue.Queue()
         self.process = subprocess.Popen(
             cmd,
@@ -134,12 +183,14 @@ class ACPProcessSupervisor:
     def write_line(self, line: str) -> None:
         """Write line to process stdin."""
         self.ensure_running()
-        if not self.process or not self.process.stdin:
+        proc = self.process
+        if not proc or not proc.stdin:
             raise RuntimeError("Subprocess stdin is unavailable")
 
         payload = line if line.endswith("\n") else f"{line}\n"
-        self.process.stdin.write(payload.encode("utf-8"))
-        self.process.stdin.flush()
+        with self._write_lock:
+            proc.stdin.write(payload.encode("utf-8"))
+            proc.stdin.flush()
 
     def read_line(self, timeout: float | None = None) -> str:
         """Read line from process stdout with optional timeout."""
@@ -153,18 +204,29 @@ class ACPProcessSupervisor:
             raise EOFError("Process stdout closed (EOF)")
         return item
 
-
     def terminate(self, timeout: float = 3.0) -> None:
-        """Gracefully terminate process (SIGTERM then SIGKILL)."""
-        if self.process is not None:
-            if self.process.poll() is None:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    self.process.wait()
-            self.process = None
+        """Gracefully terminate process (SIGTERM then SIGKILL) and close stdio pipes."""
+        proc = self.process
+        self.process = None
+        if proc is None:
+            return
+        with contextlib.suppress(Exception):
+            if proc.stdin:
+                proc.stdin.close()
+        if proc.poll() is None:
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=1.0)
+        for stream in (proc.stdout, proc.stderr):
+            with contextlib.suppress(Exception):
+                if stream:
+                    stream.close()
 
     stop = terminate
 

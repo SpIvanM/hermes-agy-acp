@@ -54,9 +54,21 @@ def resolve_binary(binary_name: str, override_path: str | None = None) -> Path |
     return None
 
 
-ThinkingLevel = Literal["low", "medium", "high", "off"]
+ThinkingLevel = Literal["low", "medium", "high", "xhigh", "off"]
 LogLevel = Literal["error", "warn", "info", "debug"]
 ProxyMode = Literal["agentic_proxy", "direct"]
+
+
+def parse_model_and_thinking(model_name: str | None) -> tuple[str | None, str | None]:
+    """Split combined model identifiers such as 'gemini-3.8-flash-high' into (model, thinking_level)."""
+    if not model_name or not str(model_name).strip():
+        return None, None
+    name = str(model_name).strip()
+    for suffix in ("xhigh", "high", "medium", "low", "off"):
+        token = f"-{suffix}"
+        if name.endswith(token) and len(name) > len(token):
+            return name[:-len(token)], suffix
+    return name, None
 
 
 def _default_hermes_home() -> Path:
@@ -101,6 +113,29 @@ def _default_mode() -> ProxyMode:
     return "agentic_proxy"
 
 
+def _default_acp_mode() -> str:
+    val = os.getenv("AGY_ACP_MODE")
+    if val is not None and val.strip():
+        return val.strip()
+    return "yolo"
+
+
+def _default_prompt_timeout() -> float:
+    val = os.getenv("AGY_PROMPT_TIMEOUT")
+    if val is not None and val.strip():
+        try:
+            parsed = float(val.strip())
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    return 900.0
+
+
+def _default_bootstrap_prompt() -> str:
+    return os.getenv("AGY_BOOTSTRAP_PROMPT", "")
+
+
 class Settings(BaseModel):
     """12-factor typed configuration for hermes-agy-acp."""
 
@@ -116,6 +151,9 @@ class Settings(BaseModel):
     )
     agy_thinking_level: ThinkingLevel = Field(default_factory=_default_thinking_level)
     agy_log_level: LogLevel = Field(default_factory=_default_log_level)
+    agy_acp_mode: str = Field(default_factory=_default_acp_mode)
+    agy_prompt_timeout: float = Field(default_factory=_default_prompt_timeout)
+    agy_bootstrap_prompt: str = Field(default_factory=_default_bootstrap_prompt)
     hermes_home: Path = Field(default_factory=_default_hermes_home)
     state_db_path: Path = Field(default_factory=_default_state_db_path)
     mode: ProxyMode = Field(default_factory=_default_mode)

@@ -25,15 +25,7 @@ def get_provider_profile() -> ProviderProfile:
     return ProviderProfile()
 
 
-_shared_supervisor: ACPProcessSupervisor | None = None
 _shared_registry: SessionRegistry | None = None
-
-
-def get_shared_supervisor() -> ACPProcessSupervisor:
-    global _shared_supervisor
-    if _shared_supervisor is None or not _shared_supervisor.is_alive():
-        _shared_supervisor = ACPProcessSupervisor()
-    return _shared_supervisor
 
 
 def get_shared_registry() -> SessionRegistry:
@@ -44,11 +36,10 @@ def get_shared_registry() -> SessionRegistry:
 
 
 def create_client(**client_kwargs: Any) -> AntigravityACPClient:
-    """Factory function creating an Antigravity ACP client sharing warm process pool."""
-    return AntigravityACPClient(
-        supervisor=get_shared_supervisor(),
-        registry=get_shared_registry(),
-    )
+    """Factory function creating an Antigravity ACP client forwarding all client kwargs."""
+    kwargs = dict(client_kwargs)
+    kwargs.setdefault("registry", get_shared_registry())
+    return AntigravityACPClient(**kwargs)
 
 
 def register(registry: Any = None) -> ProviderProfile:
