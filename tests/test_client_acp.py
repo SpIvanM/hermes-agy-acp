@@ -575,3 +575,149 @@ def test_acp_cwd_falls_back_to_home_when_work_missing_or_non_writable(tmp_path, 
         assert [e["params"]["cwd"] for e in session_news] == [str(fake_home.resolve())] * 2
     finally:
         work_dir.chmod(0o755)
+
+
+def test_live_bus_receives_events_in_realtime_without_polluting_llm_output(tmp_path, monkeypatch):
+    from hermes_agy_acp.live_bus import LiveStatusEvent, subscribe
+
+    monkeypatch.setenv("FAKE_ACP_SCENARIO", "live_status_subagents")
+    seen: list[tuple[float, LiveStatusEvent]] = []
+    unsub = subscribe("*", lambda ev: seen.append((time.monotonic(), ev)))
+    try:
+        client = AntigravityACPClient(
+            acp_command=sys.executable,
+            acp_args=[FAKE_SERVER],
+            acp_cwd=str(tmp_path),
+            settings=Settings(state_db_path=tmp_path / "state.db"),
+        )
+        t_start = time.monotonic()
+        resp = client.create_chat_completion(
+            messages=[{"role": "user", "content": "run subagents"}],
+            session_id="hermes-live-1",
+        )
+        t_end = time.monotonic()
+    finally:
+        unsub()
+
+    msg = resp.choices[0].message
+    assert msg.content == "final-clean-reply"
+    assert msg.tool_calls == []
+    assert "LiveStatusEvent" not in msg.content
+    assert "Researcher" not in msg.content
+    assert "fake-secret-999" not in msg.content
+
+    events = [ev for _, ev in seen if ev.turn_id.startswith("hermes-live-1")]
+    kinds = [ev.kind for ev in events]
+    assert "thinking" in kinds
+    assert "tool_start" in kinds
+    assert "tool_done" in kinds
+    assert kinds[-1] == "turn_end"
+
+    # Real-time delivery: first event must arrive well before completion returns
+    first_ts = next(ts for ts, ev in seen if ev.turn_id.startswith("hermes-live-1"))
+    assert t_start <= first_ts < t_end
+
+    agents = [ev.agent for ev in events]
+    assert "Orchestrator" in agents
+    assert "Researcher" in agents
+    assert "Dev" in agents
+    assert "qa" in agents
+
+    joined_args = " ".join(ev.args_summary for ev in events)
+    assert "fake-secret-999" not in joined_args
+    assert "sk-fake-1234567890" not in joined_args
+    assert "[REDACTED]" in joined_args
+
+
+def test_infer_agent_and_action_and_parse_session_update():
+    from hermes_agy_acp.client import _parse_session_update_event, infer_agent_and_action
+
+    agent, tool, args = infer_agent_and_action(
+        "start_subagent",
+        "other",
+        {"Role": "Analyst", "Prompt": "check metrics BOT_TOKEN=1234567:FAKE_TOKEN_ABCDEF123456"},
+    )
+    assert agent == "Analyst"
+    assert tool == "start_subagent"
+    assert "FAKE_TOKEN_ABCDEF123456" not in args
+    assert "[REDACTED]" in args
+
+    agent2, tool2, args2 = infer_agent_and_action(
+        "send_message",
+        "other",
+        {"Recipient": "dev-03", "Message": "apply patch"},
+    )
+    assert agent2 == "dev-03"
+    assert tool2 == "send_message"
+    assert "apply patch" in args2
+
+    agent3, tool3, args3 = infer_agent_and_action(
+        "run_command",
+        "execute",
+        {"CommandLine": 'agy -p "[P:99 R:Verifier] pytest"'},
+    )
+    assert agent3 == "Verifier"
+    assert tool3 == "run_command"
+    assert "pytest" in args3
+
+    agent4, tool4, _ = infer_agent_and_action(
+        "run_command",
+        "execute",
+        {"CommandLine": "acpx claude -s reviewer 'audit diff'"},
+    )
+    assert agent4 == "reviewer"
+    assert tool4 == "run_command"
+
+    evs = _parse_session_update_event(
+        {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "secret thought"}},
+        active_agent="Orchestrator",
+        turn_id="t-parse",
+    )
+    assert len(evs) == 1
+    assert evs[0].kind == "thinking"
+    assert evs[0].agent == "Orchestrator"
+    assert "secret thought" not in evs[0].args_summary
+
+
+def test_acp_cwd_skips_chmod_000_directory(tmp_path, monkeypatch):
+    from hermes_agy_acp.client import _default_acp_cwd, _is_writable_acp_dir
+
+    locked_parent = tmp_path / "locked_parent"
+    locked_parent.mkdir()
+    child_dir = locked_parent / "child"
+    child_dir.mkdir()
+
+    fake_home = tmp_path / "home_fallback"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    locked_parent.chmod(0o000)
+    try:
+        assert _is_writable_acp_dir(child_dir) is False
+        assert _default_acp_cwd(str(child_dir)) == str(fake_home.resolve())
+    finally:
+        locked_parent.chmod(0o755)
+
+
+def test_format_messages_preserves_burst_and_prompt_preamble_compatible_with_s_bd():
+    from hermes_agy_acp.client import _PROMPT_PREAMBLE, _format_messages_as_prompt
+
+    preamble_text = " ".join(_PROMPT_PREAMBLE)
+    assert "/s" in preamble_text
+    assert "/bd" in preamble_text
+
+    messages = [
+        {"role": "system", "content": "Follow /s and /bd strictly."},
+        {"role": "user", "content": "1. First burst item"},
+        {"role": "user", "content": [{"type": "text", "text": "2. Second burst item"}, {"type": "input_text", "text": "3. Third burst item"}]},
+        {"role": "user", "content": "4. Fourth burst item"},
+    ]
+    prompt = _format_messages_as_prompt(messages)
+    for item in (
+        "1. First burst item",
+        "2. Second burst item",
+        "3. Third burst item",
+        "4. Fourth burst item",
+    ):
+        assert item in prompt
+    assert prompt.index("1. First burst item") < prompt.index("2. Second burst item") < prompt.index("4. Fourth burst item")

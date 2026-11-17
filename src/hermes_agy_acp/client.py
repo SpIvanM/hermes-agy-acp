@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -13,6 +14,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from hermes_agy_acp.config import Settings, get_settings, parse_model_and_thinking
+from hermes_agy_acp.live_bus import (
+    ChildSessionTailer,
+    LiveStatusEvent,
+    extract_subagent_role_from_command,
+    publish as publish_live_event,
+    redact_args,
+    redact_secrets,
+)
 from hermes_agy_acp.orchestrator_bridge import (
     StreamChunks,
     completion_to_stream_chunks,
@@ -53,7 +62,8 @@ _ROLE_LABELS = {
 
 _PROMPT_PREAMBLE = (
     "You are being used as the active ACP agent backend for Hermes.",
-    "Use your native ACP tools and subagents (including invoke_subagent) to complete tasks.",
+    "Use your native ACP tools and subagents (such as start_subagent, invoke_subagent, or /s CLI helpers) in accordance with the system instructions (including /s and /bd workflows).",
+    "Preserve and track every item across multi-item or burst user messages without dropping earlier tasks.",
 )
 
 
@@ -126,7 +136,10 @@ def _resolve_timeout(timeout: Any, default_seconds: float) -> float:
 
 
 def _is_writable_acp_dir(path: Path) -> bool:
-    return path != Path("/") and path.is_dir() and os.access(path, os.W_OK | os.X_OK)
+    try:
+        return path != Path("/") and path.is_dir() and os.access(path, os.W_OK | os.X_OK)
+    except OSError:
+        return False
 
 
 def _default_acp_cwd(explicit: str | None) -> str:
@@ -251,8 +264,13 @@ def _render_message_content(content: Any) -> str:
         for item in content:
             if isinstance(item, str) and item.strip():
                 parts.append(item.strip())
-            elif isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip():
-                parts.append(item["text"].strip())
+            elif isinstance(item, dict):
+                if isinstance(item.get("text"), str) and item["text"].strip():
+                    parts.append(item["text"].strip())
+                elif "content" in item:
+                    nested = _render_message_content(item.get("content"))
+                    if nested:
+                        parts.append(nested)
         return "\n".join(parts).strip()
     return str(content).strip()
 
@@ -287,6 +305,219 @@ def _extract_chunk_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     return ""
+
+_SUBAGENT_TOOL_NAMES = frozenset({
+    "start_subagent",
+    "invoke_subagent",
+    "send_message",
+    "delegate_task",
+    "subagent",
+})
+_TOOL_PREFIX_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*):\s*(.+)$")
+_PRIMARY_ARG_KEYS = (
+    "CommandLine",
+    "command",
+    "cmd",
+    "Path",
+    "path",
+    "file_path",
+    "TargetFile",
+    "DirectoryPath",
+    "SearchPath",
+    "Prompt",
+    "prompt",
+    "Message",
+    "message",
+    "query",
+    "url",
+    "action",
+)
+_SUBAGENT_ROLE_KEYS = (
+    "role",
+    "recipient",
+    "agent",
+    "agent_name",
+    "subagent",
+    "target",
+    "name",
+    "typename",
+    "type_name",
+)
+
+
+def _normalize_raw_input(raw_input: dict[str, Any] | str | None) -> tuple[dict[str, Any] | None, str]:
+    if isinstance(raw_input, dict):
+        return raw_input, ""
+    if isinstance(raw_input, str):
+        stripped = raw_input.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    return parsed, stripped
+            except ValueError:
+                pass
+        return None, stripped
+    return None, ""
+
+
+def _extract_dict_ci(mapping: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    lowered = {str(k).lower(): v for k, v in mapping.items()}
+    for key in keys:
+        val = lowered.get(key.lower())
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def infer_agent_and_action(
+    title: str,
+    kind: str,
+    raw_input: dict[str, Any] | str | None,
+    meta: dict[str, Any] | None = None,
+) -> tuple[str, str, str]:
+    """Infer (agent_name, tool_name, redacted_args_summary) from ACP tool_call fields."""
+    clean_title = (title or "").strip()
+    clean_kind = (kind or "").strip()
+    title_arg = ""
+    tool_name = clean_title
+
+    prefix_match = _TOOL_PREFIX_RE.match(clean_title)
+    if prefix_match:
+        tool_name = prefix_match.group(1).strip()
+        title_arg = prefix_match.group(2).strip()
+
+    if isinstance(meta, dict):
+        mcp_meta = meta.get("mcp")
+        if isinstance(mcp_meta, dict) and isinstance(mcp_meta.get("toolName"), str) and mcp_meta["toolName"].strip():
+            if not tool_name or " " in tool_name:
+                tool_name = mcp_meta["toolName"].strip()
+
+    if not tool_name:
+        tool_name = clean_kind
+
+    parsed_dict, raw_str = _normalize_raw_input(raw_input)
+    agent_name = "Orchestrator"
+
+    if tool_name.lower() in _SUBAGENT_TOOL_NAMES:
+        if parsed_dict:
+            role_val = _extract_dict_ci(parsed_dict, _SUBAGENT_ROLE_KEYS)
+            if role_val:
+                agent_name = role_val
+            else:
+                text_val = _extract_dict_ci(parsed_dict, ("prompt", "message", "task"))
+                if text_val:
+                    agent_name = extract_subagent_role_from_command(text_val) or agent_name
+        elif raw_str:
+            agent_name = extract_subagent_role_from_command(raw_str) or agent_name
+    else:
+        cmd_candidate = ""
+        if parsed_dict:
+            cmd_candidate = _extract_dict_ci(parsed_dict, ("CommandLine", "command", "cmd", "args")) or ""
+        elif raw_str:
+            cmd_candidate = raw_str
+        role_from_cmd = extract_subagent_role_from_command(cmd_candidate or clean_title)
+        if role_from_cmd:
+            agent_name = role_from_cmd
+
+    summary_source: Any = ""
+    if parsed_dict:
+        for key in _PRIMARY_ARG_KEYS:
+            if key in parsed_dict and parsed_dict[key] not in (None, ""):
+                summary_source = parsed_dict[key]
+                break
+        if summary_source == "":
+            compact_pairs = [
+                f"{k}={v}"
+                for k, v in parsed_dict.items()
+                if v not in (None, "", [], {})
+            ]
+            summary_source = " ".join(compact_pairs)
+    elif raw_str:
+        summary_source = raw_str
+    elif title_arg:
+        summary_source = title_arg
+
+    return (
+        redact_secrets(agent_name),
+        redact_secrets(tool_name),
+        redact_args(summary_source),
+    )
+
+
+def _parse_session_update_event(
+    update: dict[str, Any],
+    active_agent: str,
+    turn_id: str,
+    call_context: dict[str, tuple[str, str, str]] | None = None,
+) -> list[LiveStatusEvent]:
+    """Convert one ACP session/update payload into zero or more LiveStatusEvents."""
+    if not isinstance(update, dict):
+        return []
+    session_update = str(update.get("sessionUpdate") or "").strip()
+    now = time.time()
+    fallback_agent = active_agent or "Orchestrator"
+
+    if session_update == "agent_thought_chunk":
+        return [
+            LiveStatusEvent(
+                turn_id=turn_id,
+                kind="thinking",
+                agent=fallback_agent,
+                timestamp=now,
+            )
+        ]
+
+    if session_update in ("tool_call", "tool_call_update"):
+        call_id = str(update.get("toolCallId") or update.get("callId") or "").strip()
+        title = str(update.get("title") or "").strip()
+        tool_kind = str(update.get("kind") or "").strip()
+        raw_input = update.get("rawInput") if "rawInput" in update else update.get("raw_input")
+        meta = update.get("_meta") if isinstance(update.get("_meta"), dict) else None
+        default_status = "pending" if session_update == "tool_call" else "in_progress"
+        status = str(update.get("status") or default_status).strip()
+
+        if title or raw_input is not None or tool_kind:
+            agent, tool_name, args_summary = infer_agent_and_action(title, tool_kind, raw_input, meta=meta)
+            if agent == "Orchestrator" and fallback_agent != "Orchestrator":
+                agent = fallback_agent
+            if call_context is not None and call_id:
+                prev = call_context.get(call_id)
+                if prev:
+                    if agent == "Orchestrator" and prev[0] != "Orchestrator":
+                        agent = prev[0]
+                    if not tool_name:
+                        tool_name = prev[1]
+                    if not args_summary:
+                        args_summary = prev[2]
+                call_context[call_id] = (agent, tool_name, args_summary)
+        elif call_context is not None and call_id in call_context:
+            agent, tool_name, args_summary = call_context[call_id]
+        else:
+            agent, tool_name, args_summary = (fallback_agent, "", "")
+
+        norm_status = status.lower()
+        if norm_status in ("completed", "failed", "done", "cancelled", "error"):
+            ev_kind = "tool_done"
+        elif session_update == "tool_call":
+            ev_kind = "tool_start"
+        else:
+            ev_kind = "tool_update"
+
+        return [
+            LiveStatusEvent(
+                turn_id=turn_id,
+                kind=ev_kind,
+                agent=agent,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                call_id=call_id,
+                status=status,
+                timestamp=now,
+            )
+        ]
+
+    return []
 
 
 @dataclass
@@ -383,6 +614,9 @@ class AntigravityACPClient(BaseACPClient):
         expected_session_id: str | None = None,
         text_parts: list[str] | None = None,
         reasoning_parts: list[str] | None = None,
+        turn_id: str | None = None,
+        call_context: dict[str, tuple[str, str, str]] | None = None,
+        child_tailer: ChildSessionTailer | None = None,
     ) -> bool:
         """Process server->client notifications and requests. Return True if consumed."""
         method = msg.get("method")
@@ -434,6 +668,20 @@ class AntigravityACPClient(BaseACPClient):
                 elif kind == "agent_thought_chunk":
                     if chunk and reasoning_parts is not None:
                         reasoning_parts.append(chunk)
+                if turn_id:
+                    for ev in _parse_session_update_event(
+                        update,
+                        active_agent="Orchestrator",
+                        turn_id=turn_id,
+                        call_context=call_context,
+                    ):
+                        publish_live_event(ev)
+                        if child_tailer is not None and (
+                            ev.tool_name in _SUBAGENT_TOOL_NAMES
+                            or "agy" in ev.args_summary
+                            or "acpx" in ev.args_summary
+                        ):
+                            child_tailer.start()
                 return True
 
             if "sessionUpdate" not in params and text_parts is not None:
@@ -460,6 +708,9 @@ class AntigravityACPClient(BaseACPClient):
         text_parts: list[str] | None = None,
         reasoning_parts: list[str] | None = None,
         cancel_event: threading.Event | None = None,
+        turn_id: str | None = None,
+        call_context: dict[str, tuple[str, str, str]] | None = None,
+        child_tailer: ChildSessionTailer | None = None,
     ) -> dict[str, Any]:
         supervisor.write_line(encode_message(req))
         req_id = req.id if hasattr(req, "id") else req.get("id")
@@ -493,6 +744,9 @@ class AntigravityACPClient(BaseACPClient):
                 expected_session_id=expected_session_id,
                 text_parts=text_parts,
                 reasoning_parts=reasoning_parts,
+                turn_id=turn_id,
+                call_context=call_context,
+                child_tailer=child_tailer,
             ):
                 continue
 
@@ -798,16 +1052,38 @@ class AntigravityACPClient(BaseACPClient):
 
             text_parts: list[str] = []
             reasoning_parts: list[str] = []
-            self._send_and_receive(
-                prompt_req,
-                supervisor=sup,
-                cwd=target_cwd,
-                deadline=deadline,
-                expected_session_id=acp_sess,
-                text_parts=text_parts,
-                reasoning_parts=reasoning_parts,
-                cancel_event=active_req.cancel_event,
-            )
+            turn_id = f"{session_id or acp_sess}:{req_key}"
+            call_context: dict[str, tuple[str, str, str]] = {}
+            child_tailer = ChildSessionTailer(turn_id=turn_id, since_ts=time.time() - 1.0)
+            turn_status = "completed"
+            try:
+                self._send_and_receive(
+                    prompt_req,
+                    supervisor=sup,
+                    cwd=target_cwd,
+                    deadline=deadline,
+                    expected_session_id=acp_sess,
+                    text_parts=text_parts,
+                    reasoning_parts=reasoning_parts,
+                    cancel_event=active_req.cancel_event,
+                    turn_id=turn_id,
+                    call_context=call_context,
+                    child_tailer=child_tailer,
+                )
+            except Exception:
+                turn_status = "failed"
+                raise
+            finally:
+                child_tailer.stop()
+                publish_live_event(
+                    LiveStatusEvent(
+                        turn_id=turn_id,
+                        kind="turn_end",
+                        agent="Orchestrator",
+                        status=turn_status,
+                        timestamp=time.time(),
+                    )
+                )
 
             raw_text = "".join(text_parts)
             reasoning_text = "".join(reasoning_parts)

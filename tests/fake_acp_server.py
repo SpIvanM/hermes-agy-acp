@@ -304,6 +304,71 @@ def main() -> int:
                         },
                     }
                 )
+            elif scenario == "live_status_subagents":
+                updates = [
+                    {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "internal thought"}},
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "tc_1",
+                        "title": "read_file",
+                        "kind": "read",
+                        "status": "in_progress",
+                        "rawInput": {"Path": "/home/h/work/spec.md"},
+                    },
+                    {
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": "tc_1",
+                        "status": "completed",
+                    },
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "tc_2",
+                        "title": "invoke_subagent",
+                        "kind": "other",
+                        "status": "in_progress",
+                        "rawInput": {"Role": "Researcher", "Prompt": "inspect notes"},
+                    },
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "tc_3",
+                        "title": "run_command",
+                        "kind": "execute",
+                        "status": "in_progress",
+                        "rawInput": {"CommandLine": "agy -p \"[P:15ee R:Dev] pytest tests/ --token fake-secret-999\""},
+                    },
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "tc_4",
+                        "title": "run_command",
+                        "kind": "execute",
+                        "status": "in_progress",
+                        "rawInput": {"CommandLine": "acpx codex -s qa \"check sk-fake-1234567890\""},
+                    },
+                    {
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": "tc_4",
+                        "status": "completed",
+                    },
+                ]
+                for upd in updates:
+                    _emit(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "session/update",
+                            "params": {"sessionId": session_id, "update": upd},
+                        }
+                    )
+                    time.sleep(0.02)
+                _emit(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": session_id,
+                            "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "final-clean-reply"}},
+                        },
+                    }
+                )
             else:
                 _emit(
                     {
