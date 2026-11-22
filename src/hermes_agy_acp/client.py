@@ -1075,6 +1075,12 @@ class AntigravityACPClient(BaseACPClient):
                 raise
             finally:
                 child_tailer.stop()
+
+            raw_text = "".join(text_parts)
+            reasoning_text = "".join(reasoning_parts)
+            tool_calls, cleaned_text = extract_tool_calls_from_text(raw_text)
+
+            if turn_status == "completed" and not tool_calls:
                 publish_live_event(
                     LiveStatusEvent(
                         turn_id=turn_id,
@@ -1084,10 +1090,6 @@ class AntigravityACPClient(BaseACPClient):
                         timestamp=time.time(),
                     )
                 )
-
-            raw_text = "".join(text_parts)
-            reasoning_text = "".join(reasoning_parts)
-            tool_calls, cleaned_text = extract_tool_calls_from_text(raw_text)
 
             completion = _build_completion(
                 content=cleaned_text,
