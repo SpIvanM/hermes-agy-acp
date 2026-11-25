@@ -47,7 +47,7 @@ def test_full_handshake_yolo_mode_and_combined_model_config(tmp_path, monkeypatc
     )
     resp = client.create_chat_completion(
         messages=[{"role": "user", "content": "hi"}],
-        model="gemini-3.8-flash-high",
+        model="gemini-4-hydrogen-high",
     )
     assert resp.choices[0].message.content == "ok"
 
@@ -59,7 +59,7 @@ def test_full_handshake_yolo_mode_and_combined_model_config(tmp_path, monkeypatc
 
     cfg_reqs = [e for e in entries if e.get("method") == "session/set_config_option"]
     cfg_pairs = [(r["params"]["configId"], r["params"]["value"]) for r in cfg_reqs]
-    assert ("model", "gemini-3.8-flash") in cfg_pairs
+    assert ("model", "gemini-4-hydrogen") in cfg_pairs
     assert ("thinking_level", "high") in cfg_pairs
     assert methods[-1] == "session/prompt"
 
@@ -335,9 +335,9 @@ def test_root_plugin_profile_metadata_and_path_env(tmp_path, monkeypatch):
     assert profile.process_args == ("--uid=",)
     assert profile.process_command_env_vars == ("AGY_ACP_SERVER_PATH",)
     assert profile.process_args_env_var == "AGY_ACP_ARGS"
-    assert "gemini-3.8-flash-high" in profile.fallback_models
     assert "gemini-4-hydrogen" in profile.fallback_models
     assert "gemini-4-argon" in profile.fallback_models
+    assert all("3.8-flash" not in m for m in profile.fallback_models)
 
     from hermes_agy_acp.process_pool import build_subprocess_env
 

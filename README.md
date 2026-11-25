@@ -47,7 +47,7 @@ Copy `.env.example` to `.env` and configure environment variables as needed:
 | `AGY_CLI_PATH` | Auto-detected | Path to `agy` CLI binary |
 | `AGY_ACP_SERVER_PATH` | Auto-detected | Path to `agy_acp_server` binary |
 | `AGY_ACP_ARGS` | `--uid=` (Linux) | Execution flags passed to ACP server |
-| `AGY_DEFAULT_MODEL` | `gemini-3.8-flash-high` | Default model for session prompts |
+| `AGY_DEFAULT_MODEL` | `gemini-4-hydrogen` | Default model for session prompts |
 | `AGY_THINKING_LEVEL` | `high` | Reasoning / thinking budget (`low`, `medium`, `high`, `off`) |
 | `AGY_LOG_LEVEL` | `warn` | Diagnostic log level (`error`, `warn`, `info`, `debug`) |
 | `AGY_MODE` | `agentic_proxy` | Operating mode (`agentic_proxy` or `direct`) |

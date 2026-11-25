@@ -47,7 +47,7 @@ cp -r . ~/.hermes/plugins/hermes-agy-acp
 | `AGY_CLI_PATH` | Автоопределение | Путь к исполняемому файлу `agy` |
 | `AGY_ACP_SERVER_PATH` | Автоопределение | Путь к серверу `agy_acp_server` |
 | `AGY_ACP_ARGS` | `--uid=` (Linux) | Аргументы запуска сервера ACP |
-| `AGY_DEFAULT_MODEL` | `gemini-3.8-flash-high` | Модель по умолчанию |
+| `AGY_DEFAULT_MODEL` | `gemini-4-hydrogen` | Модель по умолчанию |
 | `AGY_THINKING_LEVEL` | `high` | Уровень рассуждений (`low`, `medium`, `high`, `off`) |
 | `AGY_LOG_LEVEL` | `warn` | Уровень логирования (`error`, `warn`, `info`, `debug`) |
 | `AGY_MODE` | `agentic_proxy` | Режим работы (`agentic_proxy` или `direct`) |

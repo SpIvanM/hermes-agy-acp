@@ -59,8 +59,12 @@ LogLevel = Literal["error", "warn", "info", "debug"]
 ProxyMode = Literal["agentic_proxy", "direct"]
 
 
+CANONICAL_PRIMARY_MODEL = "gemini-4-hydrogen"
+EMERGENCY_FALLBACK_MODEL = "gemini-3.8-flash"
+
+
 def parse_model_and_thinking(model_name: str | None) -> tuple[str | None, str | None]:
-    """Split combined model identifiers such as 'gemini-3.8-flash-high' into (model, thinking_level)."""
+    """Split combined model identifiers such as 'gemini-4-hydrogen-medium' into (model, thinking_level)."""
     if not model_name or not str(model_name).strip():
         return None, None
     name = str(model_name).strip()
@@ -69,6 +73,23 @@ def parse_model_and_thinking(model_name: str | None) -> tuple[str | None, str | 
         if name.endswith(token) and len(name) > len(token):
             return name[:-len(token)], suffix
     return name, None
+
+
+def resolve_canonical_model(model_name: str | None) -> tuple[str, str | None]:
+    """Normalize logical/legacy model identifiers per SDD §3.2 policy.
+
+    gemini-4-hydrogen is the mandatory primary default; bare 'flash'/'hydrogen'
+    and stale 'gemini-3.8-flash*' inputs map to gemini-4-hydrogen.
+    """
+    base_model, parsed_thinking = parse_model_and_thinking(model_name)
+    if not base_model:
+        return CANONICAL_PRIMARY_MODEL, parsed_thinking
+    low = base_model.lower()
+    if low in ("default", "unset", "flash", "hydrogen", "acp", "antigravity-acp", CANONICAL_PRIMARY_MODEL):
+        return CANONICAL_PRIMARY_MODEL, parsed_thinking
+    if low.startswith(EMERGENCY_FALLBACK_MODEL):
+        return CANONICAL_PRIMARY_MODEL, parsed_thinking
+    return base_model, parsed_thinking
 
 
 def _default_hermes_home() -> Path:
@@ -96,7 +117,7 @@ def _default_thinking_level() -> ThinkingLevel:
     val = os.getenv("AGY_THINKING_LEVEL")
     if val is not None:
         return cast(ThinkingLevel, val)
-    return "high"
+    return "medium"
 
 
 def _default_log_level() -> LogLevel:
@@ -129,7 +150,7 @@ def _default_prompt_timeout() -> float:
                 return parsed
         except ValueError:
             pass
-    return 900.0
+    return 180.0
 
 
 def _default_bootstrap_prompt() -> str:
@@ -147,7 +168,7 @@ class Settings(BaseModel):
     )
     agy_acp_args: list[str] = Field(default_factory=_default_acp_args)
     agy_default_model: str = Field(
-        default_factory=lambda: os.getenv("AGY_DEFAULT_MODEL", "gemini-3.8-flash-high")
+        default_factory=lambda: os.getenv("AGY_DEFAULT_MODEL", CANONICAL_PRIMARY_MODEL)
     )
     agy_thinking_level: ThinkingLevel = Field(default_factory=_default_thinking_level)
     agy_log_level: LogLevel = Field(default_factory=_default_log_level)

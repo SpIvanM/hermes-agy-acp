@@ -13,7 +13,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from hermes_agy_acp.config import Settings, get_settings, parse_model_and_thinking
+from hermes_agy_acp.config import (
+    CANONICAL_PRIMARY_MODEL,
+    EMERGENCY_FALLBACK_MODEL,
+    Settings,
+    get_settings,
+    parse_model_and_thinking,
+    resolve_canonical_model,
+)
 from hermes_agy_acp.live_bus import (
     ChildSessionTailer,
     LiveStatusEvent,
@@ -91,7 +98,7 @@ class ResponseNamespace(SimpleNamespace):
 
 def _build_completion(
     content: str,
-    model: str = "gemini-3.8-flash-high",
+    model: str = CANONICAL_PRIMARY_MODEL,
     tool_calls: list[Any] | None = None,
     reasoning: str | None = None,
 ) -> ResponseNamespace:
@@ -793,11 +800,10 @@ class AntigravityACPClient(BaseACPClient):
                 logger.warning("session/set_mode(%s) failed; continuing: %s", acp_mode, exc)
 
         raw_model = str(requested_model or self.settings.agy_default_model or "").strip()
-        if not raw_model or raw_model in ("acp", "antigravity-acp"):
-            return
-
-        base_model, parsed_thinking = parse_model_and_thinking(raw_model)
-        target_thinking = str(requested_thinking or parsed_thinking or "").strip() or None
+        base_model, parsed_thinking = resolve_canonical_model(raw_model)
+        target_thinking = (
+            str(requested_thinking or parsed_thinking or self.settings.agy_thinking_level or "").strip() or None
+        )
 
         config_options = session_result.get("configOptions")
         model_opt: dict[str, Any] | None = None
@@ -822,12 +828,20 @@ class AntigravityACPClient(BaseACPClient):
 
         if model_opt is not None:
             allowed_models = _option_values(model_opt)
-            chosen_model = base_model or raw_model
+            chosen_model = base_model
             if allowed_models:
-                if base_model and base_model in allowed_models:
+                if base_model in allowed_models:
                     chosen_model = base_model
-                elif raw_model in allowed_models:
+                elif raw_model in allowed_models and not raw_model.lower().startswith(EMERGENCY_FALLBACK_MODEL):
                     chosen_model = raw_model
+                elif base_model == CANONICAL_PRIMARY_MODEL and EMERGENCY_FALLBACK_MODEL in allowed_models:
+                    logger.warning(
+                        "Primary model %s unavailable in ACP options (%s); using emergency fallback %s",
+                        CANONICAL_PRIMARY_MODEL,
+                        allowed_models,
+                        EMERGENCY_FALLBACK_MODEL,
+                    )
+                    chosen_model = EMERGENCY_FALLBACK_MODEL
             cfg_id = str(model_opt.get("id") or "model")
             try:
                 self._send_and_receive(
@@ -1023,6 +1037,7 @@ class AntigravityACPClient(BaseACPClient):
 
             active_req.acp_session_id = acp_sess
 
+            extra_body = kwargs.get("extra_body") if isinstance(kwargs.get("extra_body"), dict) else {}
             self._apply_mode_and_model(
                 supervisor=sup,
                 cwd=target_cwd,
@@ -1030,7 +1045,12 @@ class AntigravityACPClient(BaseACPClient):
                 acp_sess=acp_sess,
                 session_result=session_result,
                 requested_model=model,
-                requested_thinking=kwargs.get("thinking_level"),
+                requested_thinking=(
+                    kwargs.get("thinking_level")
+                    or kwargs.get("reasoning_effort")
+                    or extra_body.get("thinking_level")
+                    or extra_body.get("reasoning_effort")
+                ),
                 cancel_event=active_req.cancel_event,
             )
 

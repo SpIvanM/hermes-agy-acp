@@ -55,11 +55,18 @@ def test_permission_approval_response_uses_acp_v1_selected_outcome():
     assert resp_once.result == {"outcome": {"outcome": "selected", "optionId": "allow_once_id"}}
 
 
-def test_settings_defaults_yolo_timeout_900_and_empty_bootstrap(monkeypatch):
+def test_settings_defaults_yolo_timeout_180_and_empty_bootstrap(monkeypatch):
+    from hermes_agy_acp.config import CANONICAL_PRIMARY_MODEL, resolve_canonical_model
+
     monkeypatch.delenv("AGY_ACP_MODE", raising=False)
     monkeypatch.delenv("AGY_PROMPT_TIMEOUT", raising=False)
     monkeypatch.delenv("AGY_BOOTSTRAP_PROMPT", raising=False)
+    monkeypatch.delenv("AGY_DEFAULT_MODEL", raising=False)
     settings = Settings()
     assert settings.agy_acp_mode == "yolo"
-    assert settings.agy_prompt_timeout == 900.0
+    assert settings.agy_prompt_timeout == 180.0
+    assert settings.agy_default_model == CANONICAL_PRIMARY_MODEL
     assert settings.agy_bootstrap_prompt == ""
+    assert resolve_canonical_model("flash") == (CANONICAL_PRIMARY_MODEL, None)
+    assert resolve_canonical_model("gemini-4-hydrogen-medium") == (CANONICAL_PRIMARY_MODEL, "medium")
+    assert resolve_canonical_model("gemini-3.8-flash-high") == (CANONICAL_PRIMARY_MODEL, "high")
